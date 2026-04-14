@@ -12,6 +12,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ai.androidclaw.ui.screens.chat.ChatScreen
+import ai.androidclaw.ui.screens.mcp.McpScreen
 import ai.androidclaw.ui.screens.onboarding.OnboardingScreen
 import ai.androidclaw.ui.screens.settings.SettingsScreen
 import ai.androidclaw.ui.screens.skills.SkillsScreen
@@ -101,7 +102,19 @@ fun AndroidClawApp(
             }
             
             composable(NavRoutes.Settings) {
-                SettingsScreen()
+                SettingsScreen(
+                    onNavigateToMcp = {
+                        navController.navigate(NavRoutes.SETTINGS_MCP)
+                    }
+                )
+            }
+            
+            composable(NavRoutes.SETTINGS_MCP) {
+                McpScreen(
+                    onNavigateBack = {
+                        navController.popBackStack()
+                    }
+                )
             }
         }
     }

@@ -57,4 +57,5 @@ object NavRoutes {
     const val SETTINGS = "settings"
     const val SETTINGS_LLM = "settings_llm"
     const val SETTINGS_USER = "settings_user"
+    const val SETTINGS_MCP = "settings_mcp"
 }

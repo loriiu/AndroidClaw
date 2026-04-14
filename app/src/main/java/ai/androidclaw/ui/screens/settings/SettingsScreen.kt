@@ -23,7 +23,8 @@ import ai.androidclaw.domain.model.ThemeMode
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onNavigateToMcp: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showLlmDialog by remember { mutableStateOf(false) }
@@ -59,6 +60,18 @@ fun SettingsScreen(
                             onClick = { showLlmDialog = true }
                         )
                     }
+                }
+            }
+            
+            // MCP 配置
+            item {
+                SettingsSection(title = "Extensions") {
+                    SettingsItem(
+                        icon = Icons.Default.Extension,
+                        title = "MCP Servers",
+                        subtitle = "Connect external tools and data sources",
+                        onClick = onNavigateToMcp
+                    )
                 }
             }
             
@@ -197,6 +210,13 @@ fun SettingsItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
         leadingContent = { Icon(icon, contentDescription = null) },
+        trailingContent = {
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
         modifier = Modifier.clickable(onClick = onClick)
     )
 }
