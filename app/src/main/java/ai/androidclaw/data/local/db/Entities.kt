@@ -100,3 +100,30 @@ data class McpConnectionEntity(
     val authToken: String?,
     val enabled: Boolean
 )
+
+/**
+ * 提醒数据库实体
+ * 
+ * 对应 reminders 表
+ */
+@Entity(
+    tableName = "reminders",
+    indices = [
+        Index(value = ["status"]),
+        Index(value = ["scheduledAt"])
+    ]
+)
+data class ReminderEntity(
+    @PrimaryKey
+    val id: String,
+    val title: String,
+    val description: String,
+    val type: String,
+    val scheduledAt: Long,
+    val repeatIntervalMinutes: Long?,
+    val repeatDaysOfWeek: String?,  // JSON 格式存储
+    val status: String,
+    val notificationId: Int,
+    val createdAt: Long,
+    val updatedAt: Long
+)

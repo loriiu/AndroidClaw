@@ -14,9 +14,10 @@ import androidx.room.RoomDatabase
         MessageEntity::class,
         ConversationEntity::class,
         SkillEntity::class,
-        McpConnectionEntity::class
+        McpConnectionEntity::class,
+        ReminderEntity::class
     ],
-    version = 1,
+    version = 2,  // 版本升级
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun skillDao(): SkillDao
     abstract fun mcpConnectionDao(): McpConnectionDao
+    abstract fun reminderDao(): ReminderDao
     
     companion object {
         const val DATABASE_NAME = "androidclaw_db"

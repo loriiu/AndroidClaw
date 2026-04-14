@@ -1,12 +1,18 @@
 package ai.androidclaw.data.local.db
 
 import ai.androidclaw.domain.model.*
+import ai.androidclaw.domain.model.reminder.Reminder
+import ai.androidclaw.domain.model.reminder.ReminderStatus
+import ai.androidclaw.domain.model.reminder.ReminderType
+import kotlinx.serialization.json.Json
 import java.time.Instant
 
 /**
  * 实体与领域模型转换器
  */
 object EntityMapper {
+    
+    private val json = Json { ignoreUnknownKeys = true }
     
     // ========== Task 转换 ==========
     
@@ -106,11 +112,53 @@ object EntityMapper {
         )
     }
     
+    // ========== Reminder 转换 ==========
+    
+    fun ReminderEntity.toDomain(): Reminder {
+        return Reminder(
+            id = id,
+            title = title,
+            description = description,
+            type = ReminderType.valueOf(type),
+            scheduledAt = Instant.ofEpochMilli(scheduledAt),
+            repeatIntervalMinutes = repeatIntervalMinutes,
+            repeatDaysOfWeek = repeatDaysOfWeek?.let { parseDaysOfWeek(it) },
+            status = ReminderStatus.valueOf(status),
+            notificationId = notificationId,
+            createdAt = Instant.ofEpochMilli(createdAt),
+            updatedAt = Instant.ofEpochMilli(updatedAt)
+        )
+    }
+    
+    fun Reminder.toEntity(): ReminderEntity {
+        return ReminderEntity(
+            id = id,
+            title = title,
+            description = description,
+            type = type.name,
+            scheduledAt = scheduledAt.toEpochMilli(),
+            repeatIntervalMinutes = repeatIntervalMinutes,
+            repeatDaysOfWeek = repeatDaysOfWeek?.joinToString(","),
+            status = status.name,
+            notificationId = notificationId,
+            createdAt = createdAt.toEpochMilli(),
+            updatedAt = updatedAt.toEpochMilli()
+        )
+    }
+    
+    private fun parseDaysOfWeek(json: String): List<Int> {
+        return try {
+            json.split(",").map { it.trim().toInt() }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    
     // ========== 工具 JSON 序列化 ==========
     
-    private fun parseToolsFromJson(json: String): List<ToolDefinition> {
+    private fun parseToolsFromJson(jsonStr: String): List<ToolDefinition> {
         return try {
-            kotlinx.serialization.json.Json.decodeFromString<List<ToolDefinition>>(json)
+            json.decodeFromString<List<ToolDefinition>>(jsonStr)
         } catch (e: Exception) {
             emptyList()
         }
@@ -118,7 +166,7 @@ object EntityMapper {
     
     private fun toolsToJson(tools: List<ToolDefinition>): String {
         return try {
-            kotlinx.serialization.json.Json.encodeToString(tools)
+            json.encodeToString(tools)
         } catch (e: Exception) {
             "[]"
         }

@@ -130,3 +130,34 @@ interface McpConnectionDao {
     @Query("DELETE FROM mcp_connections WHERE id = :connectionId")
     suspend fun deleteConnection(connectionId: String)
 }
+
+/**
+ * 提醒 DAO
+ */
+@Dao
+interface ReminderDao {
+    
+    @Query("SELECT * FROM reminders ORDER BY scheduledAt ASC")
+    fun getAllReminders(): Flow<List<ReminderEntity>>
+    
+    @Query("SELECT * FROM reminders WHERE status = :status ORDER BY scheduledAt ASC")
+    fun getRemindersByStatus(status: String): Flow<List<ReminderEntity>>
+    
+    @Query("SELECT * FROM reminders WHERE status = 'ACTIVE' AND scheduledAt <= :currentTime ORDER BY scheduledAt ASC")
+    fun getDueReminders(currentTime: Long): Flow<List<ReminderEntity>>
+    
+    @Query("SELECT * FROM reminders WHERE id = :reminderId")
+    suspend fun getReminderById(reminderId: String): ReminderEntity?
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertReminder(reminder: ReminderEntity)
+    
+    @Update
+    suspend fun updateReminder(reminder: ReminderEntity)
+    
+    @Query("DELETE FROM reminders WHERE id = :reminderId")
+    suspend fun deleteReminder(reminderId: String)
+    
+    @Query("UPDATE reminders SET status = :status WHERE id = :reminderId")
+    suspend fun updateReminderStatus(reminderId: String, status: String)
+}

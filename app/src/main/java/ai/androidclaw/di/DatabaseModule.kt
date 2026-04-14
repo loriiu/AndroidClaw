@@ -62,4 +62,10 @@ object DatabaseModule {
     fun provideMcpConnectionDao(database: AppDatabase): McpConnectionDao {
         return database.mcpConnectionDao()
     }
+    
+    @Provides
+    @Singleton
+    fun provideReminderDao(database: AppDatabase): ReminderDao {
+        return database.reminderDao()
+    }
 }
