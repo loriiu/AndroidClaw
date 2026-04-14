@@ -1,5 +1,6 @@
 package ai.androidclaw.ui.screens.chat
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,11 +9,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ai.androidclaw.domain.model.ChatMessage
@@ -36,10 +39,15 @@ fun ChatScreen(
     val coroutineScope = rememberCoroutineScope()
     var inputText by remember { mutableStateOf("") }
     
-    // 自动滚动到底部
-    LaunchedEffect(uiState.messages.size) {
-        if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.size - 1)
+    // 自动滚动到底部（消息变化时）
+    LaunchedEffect(uiState.messages.size, uiState.isStreaming) {
+        val targetItem = if (uiState.isStreaming) {
+            uiState.messages.size // 显示在最后一条消息之后
+        } else {
+            uiState.messages.size - 1
+        }
+        if (targetItem >= 0) {
+            listState.animateScrollToItem(targetItem)
         }
     }
     
@@ -48,6 +56,12 @@ fun ChatScreen(
             TopAppBar(
                 title = { Text("AndroidClaw") },
                 actions = {
+                    // 流式输出时显示取消按钮
+                    if (uiState.isStreaming) {
+                        IconButton(onClick = { viewModel.cancelStreaming() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel")
+                        }
+                    }
                     IconButton(onClick = { viewModel.createNewConversation() }) {
                         Icon(Icons.Default.Add, contentDescription = "New Chat")
                     }
@@ -61,7 +75,7 @@ fun ChatScreen(
                 .padding(paddingValues)
         ) {
             // 消息列表
-            if (uiState.messages.isEmpty()) {
+            if (uiState.messages.isEmpty() && !uiState.isStreaming) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -86,6 +100,16 @@ fun ChatScreen(
                     items(uiState.messages) { message ->
                         ChatBubble(message = message)
                     }
+                    
+                    // 流式输出中的消息气泡
+                    if (uiState.isStreaming && uiState.streamingContent.isNotEmpty()) {
+                        item {
+                            StreamingMessageBubble(
+                                content = uiState.streamingContent,
+                                onCancel = { viewModel.cancelStreaming() }
+                            )
+                        }
+                    }
                 }
             }
             
@@ -106,7 +130,8 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Type a message...") },
                         maxLines = 4,
-                        shape = RoundedCornerShape(24.dp)
+                        shape = RoundedCornerShape(24.dp),
+                        enabled = !uiState.isStreaming
                     )
                     
                     Spacer(modifier = Modifier.width(8.dp))
@@ -118,9 +143,9 @@ fun ChatScreen(
                                 inputText = ""
                             }
                         },
-                        enabled = inputText.isNotBlank() && !uiState.isLoading
+                        enabled = inputText.isNotBlank() && !uiState.isLoading && !uiState.isStreaming
                     ) {
-                        if (uiState.isLoading) {
+                        if (uiState.isLoading || uiState.isStreaming) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
                                 strokeWidth = 2.dp
@@ -162,6 +187,63 @@ fun ChatBubble(message: ChatMessage) {
                 color = if (isUser) OnUserBubbleColor else OnAssistantBubbleColor,
                 style = MaterialTheme.typography.bodyMedium
             )
+        }
+    }
+}
+
+/**
+ * 流式消息气泡 - 带打字机效果和闪烁光标
+ */
+@Composable
+fun StreamingMessageBubble(
+    content: String,
+    onCancel: () -> Unit
+) {
+    // 闪烁光标动画
+    val infiniteTransition = rememberInfiniteTransition(label = "cursor")
+    val cursorAlpha by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursorAlpha"
+    )
+    
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Surface(
+            modifier = Modifier.widthIn(max = 280.dp),
+            shape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = 4.dp,
+                bottomEnd = 16.dp
+            ),
+            color = AssistantBubbleColor
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = content,
+                    modifier = Modifier.weight(1f, fill = false),
+                    color = OnAssistantBubbleColor,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                // 闪烁光标
+                Text(
+                    text = "▋",
+                    modifier = Modifier.alpha(cursorAlpha),
+                    color = OnAssistantBubbleColor,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }

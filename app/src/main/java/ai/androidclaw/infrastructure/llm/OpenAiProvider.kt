@@ -2,13 +2,19 @@ package ai.androidclaw.infrastructure.llm
 
 import ai.androidclaw.domain.model.ChatMessage
 import ai.androidclaw.domain.model.MessageRole
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,6 +22,7 @@ import javax.inject.Singleton
  * OpenAI API Provider
  * 
  * 实现 OpenAI GPT 系列模型的调用
+ * 支持流式输出（SSE）
  */
 @Singleton
 class OpenAiProvider @Inject constructor(
@@ -79,8 +86,7 @@ class OpenAiProvider @Inject constructor(
         }
     }
     
-    override fun chatStream(messages: List<ChatMessage>, systemPrompt: String?): Flow<String> = flow {
-        // 流式响应实现
+    override fun chatStream(messages: List<ChatMessage>, systemPrompt: String?): Flow<String> = callbackFlow {
         val requestMessages = buildMessagesList(messages, systemPrompt)
         
         val requestBody = """
@@ -99,38 +105,56 @@ class OpenAiProvider @Inject constructor(
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .build()
         
-        httpClient.newCall(request).execute().use { response ->
-            response.body?.byteStream()?.bufferedReader()?.use { reader ->
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    line?.let {
-                        if (it.startsWith("data: ")) {
-                            val data = it.removePrefix("data: ")
-                            if (data != "[DONE]") {
-                                // 解析 SSE 数据
-                                try {
-                                    val json = Json { ignoreUnknownKeys = true }
-                                    val parsed = json.parseToJsonElement(data)
-                                    val content = parsed.jsonObject["choices"]
-                                        ?.jsonArray
-                                        ?.firstOrNull()
-                                        ?.jsonObject
-                                        ?.get("delta")
-                                        ?.jsonObject
-                                        ?.get("content")
-                                        ?.jsonPrimitive
-                                        ?.content
-                                    content?.let { emit(it) }
-                                } catch (_: Exception) {
-                                    // 忽略解析错误
-                                }
-                            }
-                        }
+        val eventSourceFactory = EventSources.factoryBuilder(httpClient)
+            .build()
+        
+        val eventSourceListener = object : EventSourceListener() {
+            override fun onEvent(
+                eventSource: EventSource,
+                id: String?,
+                type: String?,
+                data: String
+            ): Unit {
+                if (data.isNotEmpty() && data != "[DONE]") {
+                    try {
+                        val json = Json { ignoreUnknownKeys = true }
+                        val parsed = json.parseToJsonElement(data)
+                        val content = parsed.jsonObject["choices"]
+                            ?.jsonArray
+                            ?.firstOrNull()
+                            ?.jsonObject
+                            ?.get("delta")
+                            ?.jsonObject
+                            ?.get("content")
+                            ?.jsonPrimitive
+                            ?.content
+                        
+                        content?.let { trySend(it) }
+                    } catch (_: Exception) {
+                        // 忽略解析错误
                     }
                 }
             }
+            
+            override fun onClosed(eventSource: EventSource) {
+                close()
+            }
+            
+            override fun onFailure(
+                eventSource: EventSource,
+                t: Throwable?,
+                response: Response?
+            ): Unit {
+                close(t)
+            }
         }
-    }
+        
+        val eventSource = eventSourceFactory.newEventSource(request, eventSourceListener)
+        
+        awaitClose {
+            eventSource.cancel()
+        }
+    }.flowOn(Dispatchers.IO)
     
     override suspend fun testConnection(): Boolean {
         return try {

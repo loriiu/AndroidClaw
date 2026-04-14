@@ -3,16 +3,20 @@ package ai.androidclaw.ui.screens.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ai.androidclaw.domain.model.ChatMessage
 import ai.androidclaw.domain.model.Conversation
+import ai.androidclaw.domain.model.LlmProviderType
 import ai.androidclaw.domain.model.MessageRole
 import ai.androidclaw.domain.repository.ChatRepository
 import ai.androidclaw.domain.repository.ConfigRepository
 import ai.androidclaw.infrastructure.llm.AnthropicProvider
+import ai.androidclaw.infrastructure.llm.LlmProvider
 import ai.androidclaw.infrastructure.llm.OllamaProvider
 import ai.androidclaw.infrastructure.llm.OpenAiProvider
 import javax.inject.Inject
@@ -33,6 +37,7 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
     
     private var currentConversationId: String? = null
+    private var streamingJob: Job? = null
     
     init {
         loadConversations()
@@ -44,14 +49,14 @@ class ChatViewModel @Inject constructor(
             configRepository.getLlmConfig().collect { config ->
                 config?.let {
                     when (it.provider) {
-                        ai.androidclaw.domain.model.LlmProviderType.OPENAI -> {
+                        LlmProviderType.OPENAI -> {
                             val apiKey = configRepository.getApiKey() ?: ""
                             openAiProvider.initialize(apiKey, it.model, it.baseUrl)
                         }
-                        ai.androidclaw.domain.model.LlmProviderType.OLLAMA -> {
+                        LlmProviderType.OLLAMA -> {
                             ollamaProvider.initialize(it.baseUrl ?: "http://localhost:11434", it.model)
                         }
-                        ai.androidclaw.domain.model.LlmProviderType.ANTHROPIC -> {
+                        LlmProviderType.ANTHROPIC -> {
                             val apiKey = configRepository.getApiKey() ?: ""
                             anthropicProvider.initialize(apiKey, it.model, it.baseUrl)
                         }
@@ -90,10 +95,16 @@ class ChatViewModel @Inject constructor(
         }
     }
     
+    /**
+     * 发送消息 - 使用流式输出
+     */
     fun sendMessage(content: String) {
         if (content.isBlank()) return
         
         val conversationId = currentConversationId ?: return
+        
+        // 取消之前的流式任务
+        streamingJob?.cancel()
         
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
@@ -103,66 +114,114 @@ class ChatViewModel @Inject constructor(
             chatRepository.saveMessage(userMessage)
             
             // 获取配置
-            val config = configRepository.getLlmConfig()
-            val userConfig = configRepository.getUserConfig()
+            val config = configRepository.getLlmConfig().first()
+            val userConfig = configRepository.getUserConfig().first()
+            val systemPrompt = buildSystemPrompt(userConfig)
             
             // 获取历史消息（用于上下文）
-            val recentMessages = mutableListOf<ChatMessage>()
-            chatRepository.getRecentMessages(conversationId, 20).collect { msgs ->
-                recentMessages.addAll(msgs)
+            val recentMessages = chatRepository.getRecentMessages(conversationId, 20).first()
+            
+            // 初始化流式输出状态
+            val streamingMessageId = java.util.UUID.randomUUID().toString()
+            _uiState.value = _uiState.value.copy(
+                isStreaming = true,
+                streamingContent = "",
+                streamingMessageId = streamingMessageId
+            )
+            
+            // 选择对应的 Provider
+            val provider: LlmProvider = when (config?.provider) {
+                LlmProviderType.OPENAI -> openAiProvider
+                LlmProviderType.OLLAMA -> ollamaProvider
+                LlmProviderType.ANTHROPIC -> anthropicProvider
+                else -> {
+                    // 没有配置时发送错误消息
+                    val errorMsg = ChatMessage.assistantMessage(
+                        conversationId,
+                        "Please configure an LLM provider in Settings."
+                    )
+                    chatRepository.saveMessage(errorMsg)
+                    _uiState.value = _uiState.value.copy(isLoading = false, isStreaming = false)
+                    return@launch
+                }
             }
             
-            try {
-                // 调用 LLM
-                val response = when (config.let { null }) {
-                    else -> {
-                        val llmConfig = kotlinx.coroutines.flow.first { it != null }
-                        when (llmConfig?.provider) {
-                            ai.androidclaw.domain.model.LlmProviderType.OPENAI -> {
-                                openAiProvider.chat(recentMessages, buildSystemPrompt(userConfig.let { null }))
-                            }
-                            ai.androidclaw.domain.model.LlmProviderType.OLLAMA -> {
-                                ollamaProvider.chat(recentMessages, buildSystemPrompt(userConfig.let { null }))
-                            }
-                            ai.androidclaw.domain.model.LlmProviderType.ANTHROPIC -> {
-                                anthropicProvider.chat(recentMessages, buildSystemPrompt(userConfig.let { null }))
-                            }
-                            else -> "Please configure an LLM provider in Settings."
-                        }
+            // 收集流式输出
+            streamingJob = launch {
+                val fullContent = StringBuilder()
+                
+                try {
+                    provider.chatStream(recentMessages, systemPrompt).collect { chunk ->
+                        fullContent.append(chunk)
+                        // 实时更新 UI
+                        _uiState.value = _uiState.value.copy(
+                            streamingContent = fullContent.toString()
+                        )
                     }
+                    
+                    // 流结束，保存完整消息
+                    val assistantMessage = ChatMessage.assistantMessage(
+                        conversationId,
+                        fullContent.toString()
+                    )
+                    chatRepository.saveMessage(assistantMessage)
+                    
+                } catch (e: Exception) {
+                    // 流中断时，保存已获取的内容或保存错误消息
+                    val finalContent = fullContent.toString()
+                    if (finalContent.isNotEmpty()) {
+                        val partialMessage = ChatMessage.assistantMessage(
+                            conversationId,
+                            "$finalContent\n\n[Stream interrupted: ${e.message}]"
+                        )
+                        chatRepository.saveMessage(partialMessage)
+                    } else {
+                        val errorMessage = ChatMessage.assistantMessage(
+                            conversationId,
+                            "Sorry, I encountered an error: ${e.message}"
+                        )
+                        chatRepository.saveMessage(errorMessage)
+                    }
+                } finally {
+                    // 清空流式状态
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isStreaming = false,
+                        streamingContent = "",
+                        streamingMessageId = null
+                    )
                 }
-                
-                // 保存助手回复
-                val assistantMessage = ChatMessage.assistantMessage(conversationId, response)
-                chatRepository.saveMessage(assistantMessage)
-                
-            } catch (e: Exception) {
-                // 保存错误消息
-                val errorMessage = ChatMessage.assistantMessage(
-                    conversationId,
-                    "Sorry, I encountered an error: ${e.message}"
-                )
-                chatRepository.saveMessage(errorMessage)
-            } finally {
-                _uiState.value = _uiState.value.copy(isLoading = false)
             }
         }
     }
     
-    private fun buildSystemPrompt(userConfig: ai.androidclaw.domain.model.UserConfig?): String {
+    /**
+     * 取消流式输出
+     */
+    fun cancelStreaming() {
+        streamingJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            isStreaming = false,
+            streamingContent = "",
+            streamingMessageId = null
+        )
+    }
+    
+    private fun buildSystemPrompt(userConfig: ai.androidclaw.domain.model.UserConfig?): String? {
+        if (userConfig == null) return null
+        
         val builder = StringBuilder()
         builder.append("You are AndroidClaw, a helpful AI assistant running on Android.")
         
-        userConfig?.let { config ->
-            if (config.name.isNotBlank()) {
-                builder.append(" The user's name is ${config.name}.")
-            }
-            if (config.role.isNotBlank()) {
-                builder.append(" Their role is: ${config.role}.")
-            }
-            if (config.systemPrompt.isNotBlank()) {
-                builder.append("\n\nAdditional instructions: ${config.systemPrompt}")
-            }
+        if (userConfig.name.isNotBlank()) {
+            builder.append(" The user's name is ${userConfig.name}.")
+        }
+        if (userConfig.role.isNotBlank()) {
+            builder.append(" Their role is: ${userConfig.role}.")
+        }
+        if (userConfig.systemPrompt.isNotBlank()) {
+            builder.append("\n\nAdditional instructions: ${userConfig.systemPrompt}")
         }
         
         return builder.toString()
@@ -193,5 +252,9 @@ data class ChatUiState(
     val conversations: List<Conversation> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    // 流式输出相关状态
+    val isStreaming: Boolean = false,
+    val streamingContent: String = "",
+    val streamingMessageId: String? = null
 )
